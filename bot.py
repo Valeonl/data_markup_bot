@@ -1,102 +1,66 @@
 import asyncio
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import FSInputFile, InputMediaPhoto, CallbackQuery, Message
-from aiogram.filters import CommandStart
+from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from core.settings import settings
-from core.keyboards import main_keyboard, project_keyboard, author_keyboard
+from core.config.settings import settings
+from core.database.database import Database
+from core.handlers import profile, registration, info, markup, balance, basic
+from core.utils.notifications import notify_users_about_restart
+import logging
+import sys
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+# Настраиваем кодировку для логгера aiogram
+aiogram_logger = logging.getLogger('aiogram')
+for handler in aiogram_logger.handlers:
+    if isinstance(handler, logging.StreamHandler):
+        handler.stream = sys.stdout
 
 # Инициализация бота и диспетчера
-# Замените 'YOUR_TOKEN' на ваш токен бота
 bot = Bot(token=settings.bots.bot_token)
 dp = Dispatcher(storage=MemoryStorage())
 
+# Инициализация базы данных
+db = Database('bot_database.db')
 
-# Словарь для хранения баланса пользователей
-user_balances = {}
-
-# Обработчик команды /start
-@dp.message(CommandStart())
-async def start(message: Message):
-    user_id = message.from_user.id
-    if user_id not in user_balances:
-        user_balances[user_id] = {'balance': 0, 'penalties': 0}
-        await message.answer("Это чат-бот для сбора и разметки обучающих наборов данных.", reply_markup=main_keyboard)
-    else:
-        await message.answer("С возвращением!", reply_markup=main_keyboard)
-
-# Обработчик кнопки "Информация о чат-боте"
-@dp.message(F.text == 'Информация о чат-боте')
-async def bot_info(message: Message):
-    photo_id = "AgACAgIAAxkDAAOWZx_5uCSgtlqgw-wGK7ySD0siGG0AAtPhMRu1awABSf9ysR7lIyeoAQADAgADeAADNgQ"
-    await message.answer_photo(photo=photo_id, caption="Это чат-бот для сбора и разметки обучающих наборов данных")
-
-# Обработчик кнопки "Информация о проекте"
-@dp.message(F.text == 'Информация о проекте')
-async def project_info(message: Message):
-    photo_id = "AgACAgIAAxkDAAOWZx_5uCSgtlqgw-wGK7ySD0siGG0AAtPhMRu1awABSf9ysR7lIyeoAQADAgADeAADNgQ"
-    await message.answer_photo(
-        photo=photo_id,
-        caption="*Чат-бот 'Разметыш'* является частью магистерской работы, посвящённой созданию системы голосового помощника в сфере видеомонтажа *Voice3Frame*.\n\nАвтор проекта: *Трифонов Валентин*",
-        parse_mode="Markdown",
-        reply_markup=project_keyboard
-    )
-
-# Обработчик кнопки "Мой баланс"
-@dp.message(F.text == 'Мой баланс')
-async def my_balance(message: Message):
-    user_id = message.from_user.id
-    if user_id not in user_balances:
-        user_balances[user_id] = {'balance': 0, 'penalties': 0}
-    
-    balance = user_balances[user_id]['balance']
-    penalties = user_balances[user_id]['penalties']
-    await message.answer(
-        f"Заработано баллов: {balance} 💼\n"
-        f"Штрафных баллов: {penalties} 😠\n"
-        f"Текущий баланс: *{balance - penalties}*",
-        parse_mode="Markdown"
-    )
-
-# Обработчик кнопки "Перейти к разметке"
-@dp.message(F.text == 'Перейти к разметке')
-async def start_markup(message: Message):
-    user_id = message.from_user.id
-    if user_id not in user_balances:
-        user_balances[user_id] = {'balance': 0, 'penalties': 0}
-    
-    user_balances[user_id]['balance'] += 1
-    await message.answer("+ 1 балл")
-
-# Обработчик колбэк-запроса для переключения на страницу автора
-@dp.callback_query(F.data == 'author_info')
-async def author_info(callback: CallbackQuery):
-    photo_id = "AgACAgIAAxkDAAOkZx_9MIy3zgF04WOIF26CKyPzAkwAAtjhMRu1awABSbJse_3Ba9rvAQADAgADcwADNgQ"
-    await callback.message.answer_photo(
-        photo=photo_id,
-        caption="*Трифонов Валентин Николаевич*\nСтудент магистратуры ИТМО\nГруппа: Р4123",
-        parse_mode="Markdown",
-        reply_markup=author_keyboard
-    )
-
-# Обработчик колбэк-запроса для возврата к описанию проекта
-@dp.callback_query(F.data == 'project_info')
-async def return_to_project_info(callback: CallbackQuery):
-    photo_id = "AgACAgIAAxkDAAOWZx_5uCSgtlqgw-wGK7ySD0siGG0AAtPhMRu1awABSf9ysR7lIyeoAQADAgADeAADNgQ"
-    await callback.message.answer_photo(
-        photo=photo_id,
-        caption="*Чат-бот 'Разметыш'* является частью магистерской работы, посвящённой созданию системы голосового помощника в сфере видеомонтажа *Voice3Frame*.\n\nАвтор проекта: *Трифонов Валентин*",
-        parse_mode="Markdown",
-        reply_markup=project_keyboard
-    )
+# Регистрация роутеров
+dp.include_router(basic.router)
+dp.include_router(profile.router)
+dp.include_router(registration.router)
+dp.include_router(info.router)
+dp.include_router(markup.router)
+dp.include_router(balance.router)
 
 # Запуск бота
 async def main():
     try:
         print("Бот запущен")
-        await dp.start_polling(bot)
+        
+        # Проверяем и обновляем роль админа при запуске
+        admin = db.get_user(settings.bots.admin_id)
+        if admin and admin['role'] != 'admin':
+            db.set_admin_role(settings.bots.admin_id)
+        
+        await notify_users_about_restart(bot, db)
+        # Оптимизированный polling
+        await dp.start_polling(
+            bot,
+            allowed_updates=['message', 'callback_query'],  # Указываем только нужные типы обновлений
+            skip_updates=True,  # Пропускаем накопившиеся обновления при перезапуске
+            polling_timeout=60  # Увеличиваем timeout для уменьшения количества запросов
+        )
     finally:
-        print("Бот отстановлен")
+        print("Бот остановлен")
         await bot.session.close()
 
 if __name__ == '__main__':

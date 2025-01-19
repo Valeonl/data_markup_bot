@@ -4,31 +4,19 @@ import requests
 import soundfile as sf
 from aiogram import Bot
 from aiogram.types import Message
-from core.settings import settings
-from core.settings import Emoji
+from core.config.settings import settings
+from core.config.settings import Emoji
 import speech_recognition as sr
 import json
 import re
 
 
-async def save_voice_to_file(bot: Bot, message: Message) -> str:
-    """Скачивает голосовое сообщение и сохраняет в формате mp3"""
+async def save_voice_to_file(bot: Bot, message: Message, file_path: str) -> str:
+    """Скачивает голосовое сообщение и сохраняет в указанный путь"""
     voice = message.voice
-    forward_date = message.date
-    formatted_date = forward_date.strftime("%Y-%m-%d")
-    formatted_time = forward_date.strftime("%H-%M-%S")
-
     voice_file_info = await bot.get_file(voice.file_id)
-    file = requests.get('https://api.telegram.org/file/bot{0}/{1}'.format(settings.bots.bot_token, voice_file_info.file_path))
-    #print(file.content)
-    voice_ogg_path = f"voice_records/{message.from_user.username}-{formatted_date}-{formatted_time}.ogg"
-    voice_wav_path = f"voice_records/{message.from_user.username}-{formatted_date}-{formatted_time}.wav"
-    with open(voice_ogg_path, 'wb') as f:
-        f.write(file.content)
-    data, samplerate = sf.read(voice_ogg_path)
-    sf.write(voice_wav_path, data, samplerate)
-    os.remove(voice_ogg_path)
-    return voice_wav_path
+    voice_ogg = await bot.download_file(voice_file_info.file_path, file_path)
+    return file_path
 
 
 async def voice_to_text_whisper(file_path: str) -> str:

@@ -5,6 +5,11 @@ __pycache__/
 
 # C extensions
 *.so
+# SQLITE
+*.db
+
+# SoundFiles
+voice_records/
 
 # Distribution / packaging
 .Python
