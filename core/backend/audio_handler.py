@@ -15,12 +15,15 @@ async def save_voice_to_file(bot: Bot, message: Message, file_path: str) -> str:
     """Скачивает голосовое сообщение и сохраняет в указанный путь"""
     voice = message.voice
     voice_file_info = await bot.get_file(voice.file_id)
-    voice_ogg = await bot.download_file(voice_file_info.file_path, file_path)
+    await bot.download_file(voice_file_info.file_path, file_path)
     return file_path
 
 
 async def voice_to_text_whisper(file_path: str) -> str:
     """Принимает путь к аудио файлу, возвращает транскрибированный текст файла."""
+    if not settings.bots.whisper:
+        raise ValueError("Whisper model is not initialized")
+        
     segments, _ = settings.bots.whisper.transcribe(file_path, language="ru", beam_size=5)
     segments = list(segments)  # The transcription will actually run here.
     result = []

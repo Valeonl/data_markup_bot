@@ -59,10 +59,9 @@ def get_settings(path: str):
         bots=Bots(
             bot_token=env.str("BOT_TOKEN"),
             admin_id=1175574901,
+            whisper=WhisperModel("small", device="cpu", compute_type="int8"),
             #google_model=sr.Recognizer(),
-            #whisper = WhisperModel("small", device="cpu", compute_type="int8"),
             #vosk_model=Model("model/vosk-model-small-ru-0.22")
-
         )
     )
 

@@ -19,12 +19,12 @@ class Database:
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='roles'")
         roles_exists = cur.fetchone() is not None
 
-        # Сохраняем данные пользователей
+        # Сохраняем данные пользователей если нужно
         old_users = []
         if users_exists:
             cur.execute("""SELECT telegram_id, username, display_name, email, 
                         organization, social_link, registration_date, points, role_id 
-                        FROM users""")  # Добавляем role_id в выборку
+                        FROM users""")
             old_users = cur.fetchall()
             cur.execute("DROP TABLE users")
         
@@ -88,14 +88,13 @@ class Database:
         )
         """)
         
-        # Создаем таблицу выполненных команд пользователями
+        # Создаем таблицу выполненных команд пользователями (без удаления)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS user_commands (
             id INTEGER PRIMARY KEY,
             user_id INTEGER,
             command_id INTEGER,
             voice_file_id TEXT,
-            voice_path TEXT,
             transcript TEXT,
             status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -335,7 +334,7 @@ class Database:
             for cmd in commands
         ]
 
-    def add_user_command(self, user_id: int, command_id: int, voice_file_id: str, voice_path: str, transcript: str) -> bool:
+    def add_user_command(self, user_id: int, command_id: int, voice_file_id: str, transcript: str) -> bool:
         """Добавляет выполненную пользователем команду"""
         conn = sqlite3.connect(self.db_file)
         cur = conn.cursor()
@@ -344,13 +343,14 @@ class Database:
             cur.execute("""
                 INSERT INTO user_commands (
                     user_id, command_id, voice_file_id, 
-                    voice_path, transcript, status
+                    transcript, status
                 )
-                VALUES (?, ?, ?, ?, ?, 'pending')
-            """, (user_id, command_id, voice_file_id, voice_path, transcript))
+                VALUES (?, ?, ?, ?, 'pending')
+            """, (user_id, command_id, voice_file_id, transcript))
             conn.commit()
             return True
-        except sqlite3.Error:
+        except sqlite3.Error as e:
+            print(f"Database error: {e}")
             return False
         finally:
             conn.close()
@@ -361,7 +361,13 @@ class Database:
         cur = conn.cursor()
         
         cur.execute("""
-            SELECT c.tag, c.description, uc.voice_file_id, uc.created_at, uc.status
+            SELECT 
+                c.tag, 
+                c.description, 
+                uc.voice_file_id, 
+                uc.created_at, 
+                uc.status,
+                uc.transcript
             FROM user_commands uc
             JOIN commands c ON c.id = uc.command_id
             WHERE uc.user_id = ?
@@ -377,7 +383,8 @@ class Database:
                 "description": cmd[1],
                 "voice_file_id": cmd[2],
                 "created_at": cmd[3],
-                "status": cmd[4]
+                "status": cmd[4],
+                "transcript": cmd[5]
             }
             for cmd in commands
         ]
@@ -512,4 +519,219 @@ class Database:
             "approved": stats[2],
             "rejected": stats[3],
             "top_users": top_users_text
-        } 
+        }
+
+    def get_command_recordings(self, command_tag: str) -> List[Dict[str, Any]]:
+        """Получает все записи для конкретной команды"""
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT 
+                uc.id,
+                u.username,
+                u.display_name,
+                uc.voice_file_id,
+                uc.transcript,
+                uc.status,
+                uc.created_at,
+                c.tag,
+                c.description
+            FROM user_commands uc
+            JOIN commands c ON c.id = uc.command_id
+            JOIN users u ON u.telegram_id = uc.user_id
+            WHERE c.tag = ?
+            ORDER BY uc.created_at DESC
+        """, (command_tag,))
+        
+        recordings = cur.fetchall()
+        conn.close()
+        
+        return [
+            {
+                "id": rec[0],
+                "username": rec[1],
+                "display_name": rec[2],
+                "voice_file_id": rec[3],
+                "transcript": rec[4],
+                "status": rec[5],
+                "created_at": rec[6],
+                "command_tag": rec[7],
+                "command_description": rec[8]
+            }
+            for rec in recordings
+        ]
+
+    def get_voice_file_id(self, recording_id: int) -> Optional[str]:
+        """Получает voice_file_id по ID записи"""
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        
+        cur.execute("SELECT voice_file_id FROM user_commands WHERE id = ?", (recording_id,))
+        result = cur.fetchone()
+        conn.close()
+        
+        return result[0] if result else None
+
+    def get_command_recordings_count(self, command_tag: str) -> int:
+        """Получает количество записей для команды"""
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM user_commands uc
+            JOIN commands c ON c.id = uc.command_id
+            WHERE c.tag = ?
+        """, (command_tag,))
+        
+        count = cur.fetchone()[0]
+        conn.close()
+        
+        return count
+
+    def delete_command_by_tag(self, command_tag: str) -> bool:
+        """Удаляет команду по тегу. Если тег 'all', удаляет все команды"""
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        
+        try:
+            # Если тег 'all', вызываем удаление всех команд
+            if command_tag == 'all':
+                print("Detected 'all' tag, deleting all commands...")
+                # Отключаем внешние ключи временно
+                cur.execute("PRAGMA foreign_keys = OFF")
+                
+                try:
+                    # Сначала удаляем все записи
+                    print("Deleting all user_commands...")
+                    cur.execute("DELETE FROM user_commands")
+                    recordings_deleted = cur.rowcount
+                    print(f"Deleted {recordings_deleted} recordings")
+                    
+                    # Затем удаляем все команды
+                    print("Deleting all commands...")
+                    cur.execute("DELETE FROM commands")
+                    commands_deleted = cur.rowcount
+                    print(f"Deleted {commands_deleted} commands")
+                    
+                except sqlite3.Error as e:
+                    print(f"Error during deletion operations: {e}")
+                    raise
+                
+                # Включаем внешние ключи обратно
+                cur.execute("PRAGMA foreign_keys = ON")
+                
+                conn.commit()
+                return True
+            
+            # Для конкретной команды - стандартное удаление
+            # Отключаем внешние ключи временно
+            cur.execute("PRAGMA foreign_keys = OFF")
+            
+            # Получаем id команды
+            cur.execute("SELECT id FROM commands WHERE tag = ?", (command_tag,))
+            command_id = cur.fetchone()
+            
+            if not command_id:
+                print(f"Command with tag '{command_tag}' not found")
+                return False
+            
+            try:
+                # Сначала удаляем все записи этой команды
+                cur.execute("DELETE FROM user_commands WHERE command_id = ?", (command_id[0],))
+                print(f"Deleted {cur.rowcount} recordings for command {command_tag}")
+                
+                # Затем удаляем саму команду
+                cur.execute("DELETE FROM commands WHERE tag = ?", (command_tag,))
+                print(f"Deleted command {command_tag}")
+                
+            except sqlite3.Error as e:
+                print(f"Database operation error: {e}")
+                raise
+            
+            # Включаем внешние ключи обратно
+            cur.execute("PRAGMA foreign_keys = ON")
+            
+            conn.commit()
+            return True
+            
+        except sqlite3.Error as e:
+            print(f"Database error occurred: {e}")
+            print("Rolling back changes...")
+            conn.rollback()
+            return False
+        finally:
+            print("Closing database connection...")
+            conn.close()
+
+    def get_total_recordings_count(self) -> int:
+        """Получает общее количество записей"""
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        
+        cur.execute("SELECT COUNT(*) FROM user_commands")
+        count = cur.fetchone()[0]
+        
+        conn.close()
+        return count
+
+    def delete_all_commands(self) -> bool:
+        """Удаляет все команды и их записи"""
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        
+        try:
+            print("Starting database deletion process...")
+            
+            # Проверяем количество записей перед удалением
+            cur.execute("SELECT COUNT(*) FROM user_commands")
+            initial_recordings = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM commands")
+            initial_commands = cur.fetchone()[0]
+            print(f"Initial state: {initial_recordings} recordings, {initial_commands} commands")
+            
+            # Отключаем внешние ключи временно
+            print("Disabling foreign keys...")
+            cur.execute("PRAGMA foreign_keys = OFF")
+            
+            try:
+                # Сначала удаляем все записи
+                print("Deleting user_commands...")
+                cur.execute("DELETE FROM user_commands")
+                recordings_deleted = cur.rowcount
+                print(f"Deleted {recordings_deleted} recordings")
+                
+                # Затем удаляем все команды
+                print("Deleting commands...")
+                cur.execute("DELETE FROM commands")
+                commands_deleted = cur.rowcount
+                print(f"Deleted {commands_deleted} commands")
+                
+            except sqlite3.Error as e:
+                print(f"Error during deletion operations: {e}")
+                raise
+            
+            # Проверяем количество записей после удаления
+            cur.execute("SELECT COUNT(*) FROM user_commands")
+            remaining_recordings = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM commands")
+            remaining_commands = cur.fetchone()[0]
+            print(f"After deletion: {remaining_recordings} recordings, {remaining_commands} commands")
+            
+            # Включаем внешние ключи обратно
+            print("Enabling foreign keys...")
+            cur.execute("PRAGMA foreign_keys = ON")
+            
+            conn.commit()
+            print("Changes committed successfully")
+            return True
+            
+        except sqlite3.Error as e:
+            print(f"Database error occurred: {e}")
+            print("Rolling back changes...")
+            conn.rollback()
+            return False
+        finally:
+            print("Closing database connection...")
+            conn.close() 
