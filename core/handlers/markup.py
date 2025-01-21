@@ -14,7 +14,7 @@ from core.keyboards.markup import (
 from core.keyboards.main import admin_keyboard, main_keyboard
 import os
 from datetime import datetime
-from core.backend.audio_handler import save_voice_to_file, voice_to_text_whisper
+from core.backend.audio_handler import save_voice_to_file, voice_to_text_whisper, voice_to_text_google, voice_to_text_vosk, process_voice_recognition
 
 router = Router()
 db = Database('bot_database.db')
@@ -90,7 +90,6 @@ async def process_voice_command(message: Message, state: FSMContext):
     data = await state.get_data()
     command_id = data['recording_command_id']
     
-    # Получаем информацию о команде
     command = db.get_command_by_id(command_id)
     if not command:
         await message.answer("Ошибка: команда не найдена!")
@@ -98,58 +97,76 @@ async def process_voice_command(message: Message, state: FSMContext):
         return
     
     try:
-        # Получаем file_id голосового сообщения
         voice_file_id = message.voice.file_id
-        
-        # Сначала отправляем сообщение о начале обработки
         processing_msg = await message.answer("🔄 Обрабатываю голосовое сообщение...")
         
-        # Получаем расшифровку
+        # Сохраняем файл
         temp_file = f"temp_{message.from_user.id}.ogg"
         await save_voice_to_file(message.bot, message, temp_file)
-        transcript = await voice_to_text_whisper(temp_file)
-        os.remove(temp_file)  # Удаляем временный файл
         
-        # Сначала показываем транскрипцию
+        # Распознаем текст разными моделями
+        whisper_text = await voice_to_text_whisper(temp_file)
+        google_text = await voice_to_text_google(temp_file)
+        vosk_text = await voice_to_text_vosk(temp_file)
+        
+        # Вычисляем схожесть для каждой модели
+        whisper_similarity = db.sorensen_dice_similarity(whisper_text, command['description'])
+        google_similarity = db.sorensen_dice_similarity(google_text, command['description'])
+        vosk_similarity = db.sorensen_dice_similarity(vosk_text, command['description'])
+        
+        # Выбираем лучший результат для сохранения
+        best_text = max(
+            [(whisper_text, whisper_similarity, "Whisper"),
+             (google_text, google_similarity, "Google"),
+             (vosk_text, vosk_similarity, "Vosk")],
+            key=lambda x: x[1]
+        )
+        
+        # Отправляем результаты распознавания
         await message.answer(
-            f"📝 <b>Расшифровка вашего сообщения:</b>\n\n"
-            f"{transcript}",
+            f"📝 <b>Результаты распознавания:</b>\n\n"
+            f"1️⃣ <b>Whisper:</b>\n{whisper_text}\n"
+            f"Схожесть: {whisper_similarity:.1f}%\n\n"
+            f"2️⃣ <b>Google Speech:</b>\n{google_text}\n"
+            f"Схожесть: {google_similarity:.1f}%\n\n"
+            f"3️⃣ <b>Vosk:</b>\n{vosk_text}\n"
+            f"Схожесть: {vosk_similarity:.1f}%\n\n"
+            f"🎯 <b>Лучший результат ({best_text[2]}):</b> {best_text[1]:.1f}%",
             parse_mode="HTML"
         )
         
-        # Сохраняем в БД
+        # Сохраняем лучший результат в БД
         if db.add_user_command(
             message.from_user.id,
             command_id,
             voice_file_id,
-            transcript
+            best_text[0]  # Лучший текст
         ):
             await message.answer(
                 "✅ Голосовая команда успешно сохранена!\n\n"
                 f"🎯 <b>Команда:</b> {command['tag']}\n"
                 f"📋 <b>Описание:</b> {command['description']}\n"
-                f"🆔 <b>ID записи:</b> <code>{voice_file_id}</code>\n\n"
-                f"📝 <b>Расшифровка:</b>\n{transcript}",
+                f"🆔 <b>ID записи:</b> <code>{voice_file_id}</code>",
                 parse_mode="HTML",
                 reply_markup=get_user_markup_keyboard()
             )
             
-            # Удаляем сообщение о обработке
             await processing_msg.delete()
-            
-            # Показываем следующую доступную команду
             await show_available_commands(message)
         else:
-            await message.answer(
-                "❌ Ошибка при сохранении команды.\n"
-                "Пожалуйста, обратитесь к администратору."
-            )
+            await message.answer("❌ Ошибка при сохранении команды!")
+            
     except Exception as e:
-        await message.answer(
-            f"❌ Произошла ошибка при обработке голосового сообщения:\n{str(e)}"
-        )
-        print(f"Error processing voice message: {e}")  # Добавляем логирование ошибки
+        await message.answer(f"❌ Ошибка при обработке: {str(e)}")
+        print(f"Error processing voice message: {e}")
     finally:
+        # Удаляем временные файлы
+        import os
+        try:
+            os.remove(temp_file)
+            os.remove(temp_file.replace('.ogg', '.wav'))
+        except:
+            pass
         await state.clear()
 
 @router.message(F.text == '💰 Мой баланс')
@@ -169,7 +186,8 @@ async def markup_editor(message: Message):
         "Здесь вы можете:\n"
         "• Добавлять новые команды\n"
         "• Просматривать список команд\n"
-        "• Удалять команды",
+        "• Удалять команды\n"
+        "• Тестировать распознавание речи",
         parse_mode="HTML",
         reply_markup=get_command_management_keyboard()
     )
@@ -623,4 +641,117 @@ async def execute_delete_all_commands(callback: CallbackQuery):
     else:
         print("Error occurred during deletion")
         await callback.answer("❌ Ошибка при удалении команд!", show_alert=True)
-        await back_to_commands_list(callback) 
+        await back_to_commands_list(callback)
+
+@router.message(F.text == "🎤 Тест распознавания")
+async def start_recognition_test(message: Message):
+    """Начало тестирования распознавания речи"""
+    if not db.is_admin(message.from_user.id):
+        await message.answer("У вас нет доступа к этой функции!")
+        return
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🔙 Вернуться",
+                callback_data="back_to_admin"
+            )
+        ]
+    ])
+    
+    await message.answer(
+        "🎤 <b>Тестирование систем распознавания речи</b>\n\n"
+        "Отправьте голосовое сообщение, и я расшифрую его всеми доступными системами:\n"
+        "• Whisper\n"
+        "• Google Speech Recognition\n"
+        "• Vosk\n\n"
+        "Для каждой системы будет показан результат распознавания.",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+    await message.answer("Отправьте голосовое сообщение...")
+
+@router.message(F.voice)
+async def process_test_voice(message: Message):
+    """Обработка тестового голосового сообщения"""
+    if not db.is_admin(message.from_user.id):
+        return
+    
+    try:
+        processing_msg = await message.answer("🔄 Обрабатываю голосовое сообщение...")
+        
+        # Сохраняем файл
+        temp_file = f"temp_test_{message.from_user.id}.ogg"
+        await save_voice_to_file(message.bot, message, temp_file)
+        
+        # Сначала показываем результат Whisper
+        whisper_text = await voice_to_text_whisper(temp_file)
+        await message.answer(
+            "🤖 <b>Whisper распознавание:</b>\n\n"
+            f"{whisper_text}",
+            parse_mode="HTML"
+        )
+        
+        # Показываем, что идет обработка другими системами
+        status_msg = await message.answer(
+            "⏳ Обработка другими системами распознавания...\n"
+            "• Google Speech Recognition\n"
+            "• Vosk"
+        )
+        
+        # Получаем результаты только от Google и Vosk
+        results = await process_voice_recognition(temp_file)
+        
+        # Формируем и отправляем сообщение только с Google и Vosk
+        response = "📊 <b>Дополнительные результаты распознавания:</b>\n\n"
+        for system, text in results:
+            response += f"{system}:\n{text or 'Нет результата'}\n\n"
+        
+        await status_msg.edit_text(response, parse_mode="HTML")
+        await processing_msg.delete()
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при обработке: {str(e)}")
+        print(f"Error processing test voice message: {e}")
+    finally:
+        # Удаляем временные файлы
+        try:
+            os.remove(temp_file)
+            os.remove(temp_file.replace('.ogg', '.wav'))
+        except:
+            pass
+
+@router.callback_query(F.data == "back_to_admin")
+async def back_to_admin_menu(callback: CallbackQuery):
+    """Возврат в админское меню"""
+    await callback.message.edit_text(
+        "🛠 <b>Редактор разметки</b>\n\n"
+        "Здесь вы можете:\n"
+        "• Добавлять новые команды\n"
+        "• Просматривать список команд\n"
+        "• Удалять команды\n"
+        "• Тестировать распознавание речи",
+        parse_mode="HTML",
+        reply_markup=get_command_management_keyboard()
+    )
+
+@router.callback_query(F.data == "test_recognition")
+async def start_recognition_test_callback(callback: CallbackQuery):
+    """Обработчик кнопки теста распознавания"""
+    await callback.message.edit_text(
+        "🎤 <b>Тестирование систем распознавания речи</b>\n\n"
+        "Отправьте голосовое сообщение, и я расшифрую его всеми доступными системами:\n"
+        "• Whisper\n"
+        "• Google Speech Recognition\n"
+        "• Vosk\n\n"
+        "Для каждой системы будет показан результат распознавания.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔙 Вернуться",
+                    callback_data="back_to_admin"
+                )
+            ]
+        ])
+    ) 

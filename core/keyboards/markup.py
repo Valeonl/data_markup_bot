@@ -1,17 +1,17 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from typing import List, Dict, Any
 
-def get_command_management_keyboard():
+def get_command_management_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура управления командами"""
-    keyboard = ReplyKeyboardMarkup(
+    return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ Добавить команду")],
             [KeyboardButton(text="📝 Список команд")],
+            [KeyboardButton(text="🎤 Тест распознавания")],
             [KeyboardButton(text="🔙 Назад в меню")]
         ],
         resize_keyboard=True
     )
-    return keyboard
 
 def get_commands_list_keyboard(commands: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """Создает клавиатуру со списком команд"""

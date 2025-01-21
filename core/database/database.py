@@ -734,4 +734,28 @@ class Database:
             return False
         finally:
             print("Closing database connection...")
-            conn.close() 
+            conn.close()
+
+    def get_command_description(self, command_id: int) -> Optional[str]:
+        """Получает описание команды по ID"""
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        
+        cur.execute("SELECT description FROM commands WHERE id = ?", (command_id,))
+        result = cur.fetchone()
+        conn.close()
+        
+        return result[0] if result else None
+
+    def sorensen_dice_similarity(self, str1: str, str2: str) -> float:
+        """Вычисляет схожесть двух строк по методу Соренсена-Дайса"""
+        # Очищаем строки от знаков препинания и приводим к нижнему регистру
+        str1 = ''.join(c.lower() for c in str1 if c.isalnum() or c.isspace())
+        str2 = ''.join(c.lower() for c in str2 if c.isalnum() or c.isspace())
+        
+        # Разбиваем на слова
+        set1 = set(str1.split())
+        set2 = set(str2.split())
+        
+        intersection = len(set1.intersection(set2))
+        return (2 * intersection / (len(set1) + len(set2))) * 100 if (len(set1) + len(set2)) > 0 else 0 

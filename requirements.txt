@@ -5,6 +5,7 @@ SpeechRecognition
 soundfile
 ctranslate2
 watchdog
+pydub
 
 asttokens
 certifi
