@@ -8,6 +8,7 @@ def get_command_management_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="➕ Добавить команду")],
             [KeyboardButton(text="📝 Список команд")],
             [KeyboardButton(text="🎤 Тест распознавания")],
+            [KeyboardButton(text="📊 Экспорт данных из БД")],
             [KeyboardButton(text="🔙 Назад в меню")]
         ],
         resize_keyboard=True

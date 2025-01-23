@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.fsm.context import FSMContext
 from core.database.database import Database
 from core.states.states import CommandStates
@@ -15,6 +15,8 @@ from core.keyboards.main import admin_keyboard, main_keyboard
 import os
 from datetime import datetime
 from core.backend.audio_handler import save_voice_to_file, voice_to_text_whisper, voice_to_text_google, voice_to_text_vosk, process_voice_recognition
+from core.utils.export import export_commands_to_csv
+import pandas as pd
 
 router = Router()
 db = Database('bot_database.db')
@@ -754,4 +756,68 @@ async def start_recognition_test_callback(callback: CallbackQuery):
                 )
             ]
         ])
-    ) 
+    )
+
+@router.message(F.text == "📊 Экспорт данных из БД")
+async def export_data(message: Message):
+    """Обработчик экспорта данных в CSV"""
+    if not db.is_admin(message.from_user.id):
+        await message.answer("У вас нет доступа к этой функции!")
+        return
+    
+    try:
+        # Отправляем сообщение о начале экспорта
+        status_msg = await message.answer(
+            "🔄 Подготовка данных для экспорта...\n"
+            "⏳ Получение данных из базы..."
+        )
+        
+        # Получаем данные из БД
+        data = db.get_commands_data_for_export()
+        
+        if not data:
+            await status_msg.edit_text("❌ Нет данных для экспорта!")
+            return
+        
+        await status_msg.edit_text(
+            f"📊 Получено {len(data)} записей\n"
+            "💾 Создание CSV файла..."
+        )
+        
+        # Создаем CSV файл
+        file_path = export_commands_to_csv(data)
+        
+        await status_msg.edit_text(
+            f"✅ CSV файл создан\n"
+            f"📤 Отправка файла..."
+        )
+        
+        # Отправляем файл
+        await message.answer_document(
+            document=FSInputFile(file_path),
+            caption=(
+                "📊 <b>Экспорт данных из базы данных</b>\n\n"
+                f"📝 Количество записей: {len(data)}\n"
+                f"📅 Дата экспорта: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n\n"
+                "В файле содержится:\n"
+                "• Теги команд\n"
+                "• Тексты команд\n"
+                "• ID голосовых сообщений\n"
+                "• Транскрипции\n"
+                "• Информация о пользователях\n"
+                "• Даты создания записей"
+            ),
+            parse_mode="HTML"
+        )
+        
+        # Удаляем временный файл
+        os.remove(file_path)
+        await status_msg.edit_text("✅ Экспорт успешно завершен!")
+        
+    except Exception as e:
+        error_msg = f"❌ Ошибка при экспорте данных: {str(e)}"
+        print(f"Export error: {e}")
+        if 'status_msg' in locals():
+            await status_msg.edit_text(error_msg)
+        else:
+            await message.answer(error_msg) 

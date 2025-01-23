@@ -759,3 +759,33 @@ class Database:
         
         intersection = len(set1.intersection(set2))
         return (2 * intersection / (len(set1) + len(set2))) * 100 if (len(set1) + len(set2)) > 0 else 0 
+
+    def get_commands_data_for_export(self) -> List[Dict[str, Any]]:
+        """Получает данные о командах и их расшифровках для экспорта"""
+        conn = sqlite3.connect(self.db_file)
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT 
+                c.tag as command_tag,
+                c.description as command_text,
+                uc.voice_file_id,
+                uc.transcript as transcription,
+                u.username,
+                u.display_name,
+                uc.created_at,
+                uc.status
+            FROM user_commands uc
+            JOIN commands c ON c.id = uc.command_id
+            JOIN users u ON u.telegram_id = uc.user_id
+            ORDER BY c.tag, uc.created_at
+        """)
+        
+        columns = [description[0] for description in cur.description]
+        results = []
+        
+        for row in cur.fetchall():
+            results.append(dict(zip(columns, row)))
+        
+        conn.close()
+        return results 
